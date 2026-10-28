@@ -33,7 +33,9 @@ Otras opciones:
 - `--retry-failed` reintenta las corridas fallidas.
 - `--data-dir` y `--results-dir` cambian las rutas.
 
-## Uso en Google Colab
+## Uso en Google Colab desde VS Code
+
+El notebook [scripts/colab_experimentos.ipynb](scripts/colab_experimentos.ipynb) se abre en VS Code y se ejecuta en un servidor de Colab con la extensión oficial *Google Colab* (kernel remoto). El `.ipynb` es local, pero las celdas corren en la máquina de Colab.
 
 1. Sube el repositorio a GitHub (los datos y `results/` están en `.gitignore`):
    ```bash
@@ -43,15 +45,24 @@ Otras opciones:
    git tag campana-v1 && git push origin campana-v1   # etiqueta fija para la campaña
    ```
 2. Sube los tres `.mat` a Google Drive (por defecto `MyDrive/BCICIV_4_mat`).
-3. Abre `scripts/colab_experimentos.ipynb` en Colab (*Archivo → Abrir cuaderno → GitHub*) con un entorno GPU. Si el repositorio es privado, guarda un token de solo lectura en *Secrets* como `GITHUB_TOKEN`.
-4. Ajusta la celda 2 (`GIT_URL`, `GIT_REF`, `DATA_DIR`, `RESULTS_DIR`) y ejecuta las celdas en orden:
+3. En VS Code, instala la extensión *Google Colab* y abre el notebook. Elige *Select Kernel → Colab → New Colab Server* y una máquina con GPU.
+4. Ajusta la celda 2 (`GIT_URL`, `GIT_REF`, `PRIVATE_REPO`, `DATA_DIR`, `RESULTS_DIR`) y ejecuta las celdas en orden:
    - Celdas 4–6: tests, control de calidad y smoke con estimación de tiempo.
    - Celda 7: lanza la campaña en segundo plano.
    - Celda 8: monitor reejecutable.
    - Celda 9: detener la campaña.
    - Celda 10: reporte.
 
-Los resultados se escriben en Drive. Tras una desconexión basta con reejecutar las celdas 1–3 y 7: las corridas completadas se saltan, la interrumpida se reentrena desde cero y las fallidas se conservan para diagnóstico. Varias sesiones pueden trabajar a la vez sobre el mismo `RESULTS_DIR` si usan sujetos o folds disjuntos.
+Particularidades de la extensión:
+
+- **Drive:** `drive.mount()` funciona desde la versión 0.2.1. Si no, usa el comando *Colab: Mount Google Drive to Server...*.
+- **Repo privado:** los *Secrets* de Colab (`userdata.get`) no funcionan en la extensión. Con `PRIVATE_REPO = True`, el notebook pide el token con un cuadro de entrada (`getpass`) y no lo guarda.
+- **Origen del código:** el paquete se ejecuta desde el commit clonado en el servidor, no desde tu carpeta local. Si cambias `src/`, haz commit y push y vuelve a ejecutar la celda 3.
+- **Sin GitHub:** con `GIT_URL = ""` puedes subir `src`, `scripts`, `configs`, `tests` y `pyproject.toml` con clic derecho → *Upload to Colab* y usar `REPO_DIR = "/content"`. En ese caso no queda commit registrado.
+- **Conexión y sesiones:** mantén VS Code conectado durante la campaña.
+  - Si el servidor se recicla, abre uno nuevo y reejecuta las celdas 1–3 y 7. Las corridas completadas se saltan, la interrumpida se reentrena desde cero y las fallidas se conservan para diagnóstico.
+  - Varias sesiones pueden trabajar a la vez sobre el mismo `RESULTS_DIR` si usan sujetos o folds disjuntos.
+- **Seguir el log:** desde la terminal experimental de la extensión (*Colab: Open Terminal*) puedes seguirlo con `tail -f`.
 
 **Cómputo estimado** (orientativo; el smoke de la celda 6 da la cifra real):
 

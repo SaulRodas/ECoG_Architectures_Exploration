@@ -6,7 +6,7 @@
 **Objetivo:** analizar qué decisiones de preprocesamiento y arquitectura afectan la correlación de Pearson de la flexión continua de cinco dedos.
 **Diseño:** 9 configuraciones entrenadas × 3 sujetos × 5 folds = **135 entrenamientos** (más 2 configuraciones de preprocesamiento verificadas por equivalencia, sin entrenar).
 **Optimizador común:** Adam con L2 acoplada.
-**Ejecución:** Google Colab, mediante `scripts/colab_experimentos.ipynb`.
+**Ejecución:** servidores de Google Colab desde VS Code (extensión *Google Colab*), mediante `scripts/colab_experimentos.ipynb`.
 **Fuera de alcance:** Optuna/TPE, ensambles, búsqueda de nuevas funciones de pérdida, selección de hiperparámetros tras observar resultados, evaluación adicional en el test oficial y los sistemas de referencia adaptados R-FF y R-DTC.
 
 > Este archivo es la especificación **completa del experimento**: un equipo debe poder implementar el repositorio sin acceder al código ni a los documentos de un proyecto anterior. Se conservan prácticas simples de reproducibilidad (configuración, semillas, versiones y resultados por fold), pero **no** se exigen hashes, manifiestos complejos, etapas formales de aprobación ni pruebas de cientos de casos.
@@ -20,7 +20,7 @@ Todos estos cambios se decidieron **antes** de entrenar cualquier modelo.
 | # | Cambio | Motivo |
 |---|---|---|
 | 1 | Retardo ECoG(t) → guante(t + **20 ms**) = **2 columnas** a 100 Hz (antes 200 ms / 20 columnas). | Decisión del autor. |
-| 2 | La campaña se ejecuta en **Google Colab** con `scripts/colab_experimentos.ipynb`, que lanza la campaña en segundo plano y permite monitorearla. | Infraestructura disponible. |
+| 2 | La campaña se ejecuta en **Google Colab desde VS Code** (kernel remoto de la extensión *Google Colab*) con `scripts/colab_experimentos.ipynb`, que lanza la campaña en segundo plano y permite monitorearla. | Infraestructura disponible. |
 | 3 | **No se guardan pesos** (`model_last.pt`); `predictions.npz` conserva las predicciones exactas de la época 50. | Espacio en Drive (~9 GB evitados). |
 | 4 | **TF32 permitido** en GPUs Ampere o posteriores: los tensores siguen en float32, pero las convoluciones y multiplicaciones de matrices usan TF32. Cada corrida registra la GPU y el estado de TF32. Se recomienda una sola clase de GPU para toda la campaña. | Coste de cómputo en Colab. |
 | 5 | **P2 y P4 no se entrenan.** Bajo la cadena común son equivalentes a P1 por construcción (sección 5.1); se verifica numéricamente en cada sujeto/fold. | Evitar evaluaciones repetidas. |
