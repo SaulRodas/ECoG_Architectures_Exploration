@@ -4,11 +4,14 @@ Experimento exploratorio: ¿cómo cambia el Pearson de la flexión continua de c
 
 **Campaña:** 9 configuraciones × 3 sujetos × 5 folds temporales = **135 entrenamientos**.
 
+**Campaña complementaria (posterior):** A5a y A5b × 3 × 5 = **30 entrenamientos**. Descompone A5 en la cadena A0 → A5a → A5b → A5 y calcula contrastes de interacción pre-especificados. Se decidió con resultados parciales, así que se reporta aparte (sección 12 del plan).
+
 | Familia | Configuraciones | Mantiene fijo |
 |---|---|---|
 | Control | P0 = A0 (CMR + U-Net dilatada, BatchNorm, dropout 0.3, interpolación) | — |
 | P | P1 (sin referencia), P3 (z-score + CMR), P5 (z-score − mediana + CMR) | arquitectura A0 |
 | A | A1 (LayerNorm), A2 (dropout 0.1), A3 (ConvTranspose depthwise), A4 (concat antes de conv), A5 (combinación) | preprocesamiento P0 |
+| A (complementaria) | A5a (LayerNorm + dropout 0.1), A5b (A5a + concat antes de conv = A5 sin ConvTranspose) | preprocesamiento P0 |
 
 P2 y P4 **no se entrenan**: bajo la cadena común son equivalentes a P1. Se verifica numéricamente en cada sujeto/fold (`results/summary/feature_equivalence.csv`; véase la sección 5.1 del plan).
 
@@ -22,12 +25,14 @@ pip install -r requirements.txt
 python -m pytest -q                               # comprobaciones mínimas (~15 s en CPU)
 python scripts/run_experiments.py --quality       # control de calidad → results/quality/
 python scripts/run_experiments.py --smoke         # 1 época × 2 batches en S1/B1 → results/_smoke/
-python scripts/run_experiments.py --all           # campaña completa (reanudable)
+python scripts/run_experiments.py --variants P0 P1 P3 P5 A1 A2 A3 A4 A5   # campaña principal (reanudable)
+python scripts/run_experiments.py --variants A5a A5b                      # complementaria, al terminar la principal
 python scripts/make_report.py                     # tablas y figuras → results/summary/
 ```
 
 Otras opciones:
 
+- `--all` planifica las 11 variantes (165 corridas).
 - `--subjects S1 S2`, `--folds B1` y `--variants P0 A3` acotan la campaña.
 - `--dry-run` muestra el plan y su estado.
 - `--retry-failed` reintenta las corridas fallidas.
@@ -52,6 +57,7 @@ El notebook [scripts/colab_experimentos.ipynb](scripts/colab_experimentos.ipynb)
    - Celda 8: monitor reejecutable.
    - Celda 9: detener la campaña.
    - Celda 10: reporte.
+   - Celda 11: campaña complementaria A5a/A5b (30 entrenamientos), su monitor y los contrastes. Se ejecuta solo cuando la principal haya terminado y con el commit que define A5a/A5b.
 
 Particularidades de la extensión:
 
@@ -83,7 +89,7 @@ results/
 ├── quality/                           canales, fase del guante, recortes por canal/fold, parámetros de
 │                                      entrada, estadísticas de características, equivalencias, figuras
 └── summary/                           results_all.csv, results_subjects.csv, paired_deltas*.csv,
-                                       feature_equivalence.csv, figures/
+                                       contrasts*.csv, feature_equivalence.csv, figures/
 ```
 
 Cada `config.json` guarda la configuración completa, la semilla, las versiones de Python/PyTorch/MNE, la GPU, el estado de TF32 y el commit de git.
@@ -96,7 +102,7 @@ Cada `config.json` guarda la configuración completa, la semilla, las versiones 
 | `src/ecog_ablations/data.py` | lectura de `train_data`/`train_dg`, bloques, guante a 100 Hz |
 | `src/ecog_ablations/cleaning.py` | exclusión fija de canales y clip robusto |
 | `src/ecog_ablations/preprocessing.py` | P0–P5, FIR, Morlet, escalado, ventanas, equivalencias |
-| `src/ecog_ablations/models.py` | A0–A5 (`EncoderDecoder1D`) |
+| `src/ecog_ablations/models.py` | A0–A5, A5a y A5b (`EncoderDecoder1D`) |
 | `src/ecog_ablations/training.py` | Adam + L2, pérdida, determinismo |
 | `src/ecog_ablations/evaluation.py` | overlap-add y métricas |
 | `src/ecog_ablations/runner.py` | campaña reanudable y control de calidad |

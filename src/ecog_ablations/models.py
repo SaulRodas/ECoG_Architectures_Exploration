@@ -1,4 +1,4 @@
-"""Encoder–decoder 1D configurable para A0–A5.
+"""Encoder–decoder 1D configurable para A0–A5, A5a y A5b.
 
 Todos los anchos vienen explícitos de configs/experiment.yaml; no hay proyecciones ocultas ni recortes:
 si una concatenación no coincide en longitud o canales, se lanza un error.

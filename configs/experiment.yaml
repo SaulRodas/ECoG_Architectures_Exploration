@@ -3,7 +3,7 @@
 
 experiment:
   name: ecog-architecture-ablations
-  version: "1.0.0"
+  version: "1.1.0"                  # 1.1.0: campaña complementaria A5a/A5b (plan §12)
 
 data:
   raw_dir: data/raw
@@ -58,7 +58,7 @@ runtime:
   deterministic: true
   save_model_weights: false
 
-# Arquitecturas A0–A5 (encoder–decoder 1D). Todos los anchos son explícitos.
+# Arquitecturas A0–A5, A5a y A5b (encoder–decoder 1D). Todos los anchos son explícitos.
 # decoder_channels / decoder_kernel_sizes van del nivel más profundo al más superficial.
 architectures:
   A0: &base
@@ -94,6 +94,15 @@ architectures:
     upsample: convtranspose
     convtranspose_mode: depthwise
     decoder_order: upsample_concat_conv
+  A5a:                              # A5 sin ConvTranspose ni concat previa = A1 + A2
+    <<: *base
+    normalization: layer
+    dropout: 0.1
+  A5b:                              # A5 sin ConvTranspose = A1 + A2 + A4
+    <<: *base
+    normalization: layer
+    dropout: 0.1
+    decoder_order: upsample_concat_conv
 
 # Configuraciones entrenadas (9 × 3 sujetos × 5 folds = 135 fits). P0 = A0.
 variants:
@@ -106,6 +115,24 @@ variants:
   A3: {family: A, preprocessing: P0, architecture: A3, control: P0, label: "A3: ConvTranspose depthwise"}
   A4: {family: A, preprocessing: P0, architecture: A4, control: P0, label: "A4: concat antes de conv"}
   A5: {family: A, preprocessing: P0, architecture: A5, control: P0, label: "A5: combinación A1–A4"}
+  # Campaña complementaria posterior (plan §12): descomposición de A5, 2 × 3 × 5 = 30 fits.
+  # Se lanza aparte, tras la principal (notebook, sección 11).
+  A5a: {family: A, preprocessing: P0, architecture: A5a, control: P0, label: "A5a: LayerNorm + dropout 0.1"}
+  A5b: {family: A, preprocessing: P0, architecture: A5b, control: P0, label: "A5b: A5a + concat antes de conv"}
+
+# Contrastes de la descomposición de A5 (plan §12): combinaciones lineales del Pearson macro, apareadas por
+# sujeto y fold (P0 = A0). Los tres pasos suman A5 − P0; cada interacción compara un paso con el efecto
+# aislado del mismo componente medido sobre A0.
+contrasts:
+  - {name: "A5a − P0", kind: paso, terms: {A5a: 1, P0: -1}, label: "LayerNorm + dropout 0.1"}
+  - {name: "A5b − A5a", kind: paso, terms: {A5b: 1, A5a: -1}, label: "+ concat antes de conv"}
+  - {name: "A5 − A5b", kind: paso, terms: {A5: 1, A5b: -1}, label: "+ ConvTranspose depthwise"}
+  - {name: "A5a − A1 − A2 + P0", kind: interacción, terms: {A5a: 1, A1: -1, A2: -1, P0: 1},
+     label: "LayerNorm × dropout 0.1"}
+  - {name: "(A5b − A5a) − (A4 − P0)", kind: interacción, terms: {A5b: 1, A5a: -1, A4: -1, P0: 1},
+     label: "concat × (LayerNorm + dropout 0.1)"}
+  - {name: "(A5 − A5b) − (A3 − P0)", kind: interacción, terms: {A5: 1, A5b: -1, A3: -1, P0: 1},
+     label: "ConvTranspose × (LayerNorm + dropout 0.1 + concat)"}
 
 # P2 y P4 no se entrenan: son equivalentes a P1 por construcción bajo la cadena común.
 # Se verifica numéricamente en cada sujeto/fold. P5 frente a P3 es solo informativo.

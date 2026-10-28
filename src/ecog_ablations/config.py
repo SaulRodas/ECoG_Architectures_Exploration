@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "experiment.yaml"
 
 PREPROCESSINGS = ("P0", "P1", "P2", "P3", "P4", "P5")
-# Valores implementados para A0–A5. Los órdenes y modos que solo usaban R-FF/R-DTC
+# Valores implementados para A0–A5 (A5a y A5b solo los combinan). Los órdenes y modos que solo usaban R-FF/R-DTC
 # quedaron fuera de alcance y se rechazan explícitamente.
 NORMALIZATIONS = ("batch", "layer")
 UPSAMPLES = ("interp", "convtranspose")
@@ -125,6 +125,15 @@ def validate_config(cfg: dict[str, Any]) -> None:
     for pair in cfg["equivalence_checks"]["pairs"]:
         if pair["preprocessing"] not in PREPROCESSINGS or pair["reference"] not in PREPROCESSINGS:
             raise ValueError(f"verificación de equivalencia inválida: {pair}")
+    names = [c["name"] for c in cfg.get("contrasts", [])]
+    if len(set(names)) != len(names):
+        raise ValueError("contrastes con nombre repetido")
+    for contrast in cfg.get("contrasts", []):
+        unknown = [v for v in contrast["terms"] if v not in cfg["variants"]]
+        if unknown:
+            raise ValueError(f"contraste {contrast['name']}: variantes desconocidas {unknown}")
+        if sum(contrast["terms"].values()) != 0:
+            raise ValueError(f"contraste {contrast['name']}: los pesos deben sumar 0")
 
 
 def seed_for(cfg: dict[str, Any], subject: str, fold: str) -> int:

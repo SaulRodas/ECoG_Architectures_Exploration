@@ -22,9 +22,12 @@ SURFACE, INK, INK_2, MUTED = "#fcfcfb", "#0b0b0b", "#52514e", "#898781"
 GRID, AXIS = "#e1e0d9", "#c3c2b7"
 SLOTS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 SUBJECT_COLORS = {"S1": SLOTS[0], "S2": SLOTS[1], "S3": SLOTS[2]}
-# Color fijo por variante en todas las figuras; el control va en tinta (énfasis neutro).
+# Color fijo por variante en todas las figuras; el control va en tinta (énfasis neutro). Los ocho tonos ya
+# están asignados: A5a/A5b comparten el de A5 y se distinguen por el trazo (punteado → discontinuo → continuo).
 VARIANT_COLORS = {"P0": INK, "P1": SLOTS[0], "P3": SLOTS[1], "P5": SLOTS[2], "A1": SLOTS[3],
-                  "A2": SLOTS[4], "A3": SLOTS[5], "A4": SLOTS[6], "A5": SLOTS[7]}
+                  "A2": SLOTS[4], "A3": SLOTS[5], "A4": SLOTS[6], "A5": SLOTS[7], "A5a": SLOTS[7], "A5b": SLOTS[7]}
+VARIANT_LINESTYLES = {"A5a": (0, (1, 1.5)), "A5b": (0, (4, 2))}
+MULTICOMPONENT = ("A5", "A5a", "A5b")
 SEQ_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 
 RC = {
@@ -135,7 +138,7 @@ def paired_deltas(df: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, 
         control = spec["control"]
         if control is None:
             continue
-        kind = "descriptiva (multicomponente)" if variant == "A5" else "principal"
+        kind = "descriptiva (multicomponente)" if variant in MULTICOMPONENT else "principal"
         for _, row in done[done["variant"] == variant].iterrows():
             key = (control, row["subject"], row["fold"])
             if key not in r.index:
@@ -147,21 +150,49 @@ def paired_deltas(df: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, 
     folds = pd.DataFrame(rows)
     if folds.empty:
         return folds, pd.DataFrame()
+    return folds, _summarize_deltas(folds, ("kind", "variant"))
+
+
+def contrasts(df: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Contrastes de cfg['contrasts']: Σ peso·Pearson macro en cada sujeto/fold que tenga todas sus variantes."""
+    done = _completed(df)
+    if done.empty or not cfg.get("contrasts"):
+        return pd.DataFrame(), pd.DataFrame()
+    r = done.set_index(["variant", "subject", "fold"])["pearson_macro"]
+    rows = []
+    for contrast in cfg["contrasts"]:
+        terms = contrast["terms"]
+        for subject in cfg["data"]["subjects"]:
+            for fold in cfg["folds"]["names"]:
+                if any((v, subject, fold) not in r.index for v in terms):
+                    continue
+                values = [r.loc[(v, subject, fold)] for v in terms]
+                delta = sum(w * x for w, x in zip(terms.values(), values)) if all(pd.notna(values)) else np.nan
+                rows.append({"comparison": contrast["name"], "kind": contrast["kind"], "label": contrast["label"],
+                             "subject": subject, "fold": fold, "delta": delta})
+    folds = pd.DataFrame(rows)
+    if folds.empty:
+        return folds, pd.DataFrame()
+    return folds, _summarize_deltas(folds, ("kind", "label"))
+
+
+def _summarize_deltas(folds: pd.DataFrame, info: tuple[str, ...]) -> pd.DataFrame:
+    """Media y DE de las diferencias por comparación × sujeto; fila 'global' = media de sujetos con igual peso."""
     summary = []
     for (comparison, subject), g in folds.groupby(["comparison", "subject"], sort=False):
         d = g["delta"].dropna()
-        summary.append({"comparison": comparison, "kind": g["kind"].iloc[0], "variant": g["variant"].iloc[0],
+        summary.append({"comparison": comparison, **{c: g[c].iloc[0] for c in info},
                         "subject": subject, "n_pairs": len(g), "n_invalid": int(g["delta"].isna().sum()),
                         "delta_mean": d.mean(), "delta_sd": d.std(ddof=1), "n_positive": int((d > 0).sum())})
     summary = pd.DataFrame(summary)
     glob = []
     for comparison, g in summary.groupby("comparison", sort=False):
-        glob.append({"comparison": comparison, "kind": g["kind"].iloc[0], "variant": g["variant"].iloc[0],
+        glob.append({"comparison": comparison, **{c: g[c].iloc[0] for c in info},
                      "subject": "global", "n_subjects": len(g), "n_pairs": g["n_pairs"].sum(),
                      "n_invalid": g["n_invalid"].sum(), "delta_mean": g["delta_mean"].mean(),
                      "delta_sd": g["delta_mean"].std(ddof=1) if len(g) > 1 else np.nan,
                      "n_positive": g["n_positive"].sum()})
-    return folds, pd.concat([summary, pd.DataFrame(glob)], ignore_index=True)
+    return pd.concat([summary, pd.DataFrame(glob)], ignore_index=True)
 
 
 def collect_equivalence(results_dir: str | Path) -> pd.DataFrame:
@@ -207,14 +238,24 @@ def plot_pearson_by_variant(df: pd.DataFrame, cfg: dict[str, Any], path: Path) -
         return _save(fig, path)
 
 
-def plot_paired_deltas(folds: pd.DataFrame, cfg: dict[str, Any], path: Path) -> Path | None:
+def plot_paired_deltas(folds: pd.DataFrame, cfg: dict[str, Any], path: Path,
+                       xlabel: str = "Δ Pearson macro frente al control (apareado por sujeto y fold)",
+                       title: str = "Diferencias apareadas") -> Path | None:
+    """Puntos por sujeto/fold y media global por comparación; con columna 'label' (contrastes), etiqueta en dos
+    líneas y separación entre tipos ('kind')."""
     if folds.empty:
         return None
     comparisons = list(dict.fromkeys(folds["comparison"]))
     subjects = [s for s in cfg["data"]["subjects"] if s in set(folds["subject"])]
+    labels = dict(zip(folds["comparison"], folds["label"])) if "label" in folds else {}
+    kinds = dict(zip(folds["comparison"], folds["kind"]))
     with plt.rc_context(RC):
-        fig, ax = plt.subplots(figsize=(6.5, 0.45 * len(comparisons) + 1.6))
+        fig, ax = plt.subplots(figsize=(6.5, (0.6 if labels else 0.45) * len(comparisons) + 1.6))
         ax.axvline(0, color=AXIS, linewidth=1.0, zorder=1)
+        if labels:
+            for i in range(1, len(comparisons)):
+                if kinds[comparisons[i]] != kinds[comparisons[i - 1]]:
+                    ax.axhline(i - 0.5, color=AXIS, linewidth=0.8, zorder=1)
         for i, comparison in enumerate(comparisons):
             g = folds[folds["comparison"] == comparison]
             for k, subject in enumerate(subjects):
@@ -224,10 +265,10 @@ def plot_paired_deltas(folds: pd.DataFrame, cfg: dict[str, Any], path: Path) -> 
                            edgecolors=SURFACE, linewidths=0.8, zorder=3)
             mean = g.groupby("subject")["delta"].mean().mean()
             ax.scatter([mean], [i], marker="D", s=28, color=INK, zorder=4)
-        ax.set_yticks(range(len(comparisons)), comparisons)
+        ax.set_yticks(range(len(comparisons)), [f"{labels[c]}\n{c}" if c in labels else c for c in comparisons])
         ax.invert_yaxis()
-        ax.set_xlabel("Δ Pearson macro frente al control (apareado por sujeto y fold)")
-        ax.set_title("Diferencias apareadas")
+        ax.set_xlabel(xlabel)
+        ax.set_title(title)
         ax.grid(axis="y", visible=False)
         handles = [plt.Line2D([], [], color=SUBJECT_COLORS[s], marker="o", linestyle="", label=s) for s in subjects]
         handles.append(plt.Line2D([], [], color=INK, marker="D", linestyle="", label="media global"))
@@ -276,9 +317,10 @@ def plot_training_curves(histories: pd.DataFrame, cfg: dict[str, Any], path: Pat
     if histories.empty:
         return None
     panels = [("Familia P (arquitectura A0)", ["P0", "P1", "P3", "P5"]),
-              ("Familia A (preprocesamiento P0)", ["P0", "A1", "A2", "A3", "A4", "A5"])]
+              ("Familia A (preprocesamiento P0)", ["P0", "A1", "A2", "A3", "A4", "A5"]),
+              ("Descomposición de A5 (preprocesamiento P0)", ["P0", "A5a", "A5b", "A5"])]
     with plt.rc_context(RC):
-        fig, axes = plt.subplots(1, 2, figsize=(10, 3.6), sharey=True, constrained_layout=True)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 3.6), sharey=True, constrained_layout=True)
         for ax, (title, variants) in zip(axes, panels):
             for variant in variants:
                 g = histories[histories["variant"] == variant]
@@ -286,6 +328,7 @@ def plot_training_curves(histories: pd.DataFrame, cfg: dict[str, Any], path: Pat
                     continue
                 curve = g.groupby("epoch")["val_pearson_macro"].mean()
                 ax.plot(curve.index, curve.values, color=VARIANT_COLORS[variant],
+                        linestyle=VARIANT_LINESTYLES.get(variant, "-"),
                         linewidth=2.0 if variant != "P0" else 2.4, label="P0 = A0" if variant == "P0" else variant)
             ax.set_title(title)
             ax.set_xlabel("época")
@@ -337,12 +380,18 @@ def write_summary(results_dir: str | Path, cfg: dict[str, Any]) -> dict[str, Any
     folds, deltas = paired_deltas(df, cfg)
     folds.to_csv(out / "paired_deltas.csv", index=False)
     deltas.to_csv(out / "paired_deltas_summary.csv", index=False)
+    contrast_folds, contrast_summary = contrasts(df, cfg)
+    contrast_folds.to_csv(out / "contrasts.csv", index=False)
+    contrast_summary.to_csv(out / "contrasts_summary.csv", index=False)
     equivalence = collect_equivalence(results_dir)
     equivalence.to_csv(out / "feature_equivalence.csv", index=False)
     histories = load_histories(results_dir, df)
     figs = {
         "pearson_by_variant": plot_pearson_by_variant(df, cfg, figures / "pearson_by_variant.png"),
         "paired_deltas": plot_paired_deltas(folds, cfg, figures / "paired_deltas.png"),
+        "contrasts": plot_paired_deltas(contrast_folds, cfg, figures / "contrasts.png",
+                                        xlabel="Contraste de Pearson macro (Σ peso·r, apareado por sujeto y fold)",
+                                        title="Descomposición de A5: pasos e interacciones"),
         "pearson_per_finger": plot_finger_heatmap(subjects, cfg, figures / "pearson_per_finger.png"),
         "training_curves": plot_training_curves(histories, cfg, figures / "training_curves.png"),
         "example_predictions": plot_example_predictions(results_dir, cfg, figures / "example_predictions_P0.png"),

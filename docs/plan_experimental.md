@@ -4,7 +4,7 @@
 **Tipo de estudio:** exploratorio, orientado a un artículo científico
 **Datos:** BCI Competition IV — Dataset 4; tres sujetos (S1, S2, S3)
 **Objetivo:** analizar qué decisiones de preprocesamiento y arquitectura afectan la correlación de Pearson de la flexión continua de cinco dedos.
-**Diseño:** 9 configuraciones entrenadas × 3 sujetos × 5 folds = **135 entrenamientos** (más 2 configuraciones de preprocesamiento verificadas por equivalencia, sin entrenar).
+**Diseño:** 9 configuraciones entrenadas × 3 sujetos × 5 folds = **135 entrenamientos** (más 2 configuraciones de preprocesamiento verificadas por equivalencia, sin entrenar). Campaña complementaria posterior: 2 variantes que descomponen A5 × 3 × 5 = **30 entrenamientos** (sección 12).
 **Optimizador común:** Adam con L2 acoplada.
 **Ejecución:** servidores de Google Colab desde VS Code (extensión *Google Colab*), mediante `scripts/colab_experimentos.ipynb`.
 **Fuera de alcance:** Optuna/TPE, ensambles, búsqueda de nuevas funciones de pérdida, selección de hiperparámetros tras observar resultados, evaluación adicional en el test oficial y los sistemas de referencia adaptados R-FF y R-DTC.
@@ -421,6 +421,7 @@ ecog-architecture-ablations/
         ├── results_subjects.csv
         ├── paired_deltas.csv
         ├── paired_deltas_summary.csv
+        ├── contrasts.csv / contrasts_summary.csv   # descomposición de A5 (sección 12)
         ├── feature_equivalence.csv
         └── figures/
 ```
@@ -440,9 +441,10 @@ python scripts/make_report.py
 1. **Datos:** lectura de S1/S2/S3, canales `61/46/63`, cinco bloques, cinco dedos y retención de orden cero alineada.
 2. **Limpieza:** un pico sintético queda limitado; un canal excluido no entra a CMR ni al modelo.
 3. **Sin contaminación:** alterar solo validación no cambia las estadísticas ni las ventanas de entrenamiento; las ventanas respetan bloques, purga y retardo de 2 columnas.
-4. **Arquitecturas:** A0–A5 con entradas sintéticas de S1, S2 y S3 producen `(B,5,256)`, retropropagan sin NaN/Inf, concatenan en la posición indicada y tienen los anchos de la sección 6. `linear_upsample` da los mismos valores y gradientes que `F.interpolate` lineal, por separado y dentro de A0, A1, A2 y A4.
+4. **Arquitecturas:** A0–A5, A5a y A5b con entradas sintéticas de S1, S2 y S3 producen `(B,5,256)`, retropropagan sin NaN/Inf, concatenan en la posición indicada y tienen los anchos de la sección 6. `linear_upsample` da los mismos valores y gradientes que `F.interpolate` lineal, por separado y dentro de A0, A1, A2, A4, A5a y A5b.
 5. **Métrica:** una predicción idéntica produce Pearson 1; una predicción constante se marca inválida.
 6. **DSP:** la potencia Morlet coincide con `mne.time_frequency.tfr_array_morlet`; P2 y P4 coinciden con P1.
+7. **Contrastes (sección 12):** con un Pearson sintético aditivo por componente, las interacciones son nulas y los tres pasos suman A5 − P0.
 
 ---
 
@@ -466,6 +468,7 @@ En caso de error técnico se corrige el software y se repiten **solo las corrida
 - Tabla de P0–P5 (con la equivalencia de P2/P4) y tabla de A0–A5.
 - Los cinco folds, presupuesto de 135 entrenamientos, Adam + L2, TF32 y definición de Pearson.
 - Resultados por sujeto, diferencias respecto a los controles y limitaciones.
+- Descomposición de A5 (sección 12), presentada como análisis posterior: A5a, A5b, los pasos y las interacciones.
 
 **En el repositorio:**
 
@@ -476,6 +479,40 @@ En caso de error técnico se corrige el software y se repiten **solo las corrida
 - Semillas, versiones, GPU, conteos de parámetros y errores de ejecución.
 
 **Límite de interpretación:** la validación cruzada permite comparar alternativas con menor dependencia de un solo bloque, pero los folds comparten datos de entrenamiento. Además, la limpieza preventiva de S3 está motivada por conocimiento previo del test. El experimento ofrece evidencia **exploratoria y comparativa**, no una nueva evaluación independiente del rendimiento final en test.
+
+---
+
+## 12. Campaña complementaria posterior: descomposición de A5
+
+**Carácter posterior.** Esta extensión **no** formaba parte del diseño inicial. Se decidió el 2026-10-28, con 93 de los 135 entrenamientos completados, al observar que A5 tenía la mayor diferencia apareada frente a P0 mientras que A3 (su único componente con efecto aislado negativo) quedaba por debajo de P0. Se reporta separada de la campaña principal, como análisis exploratorio; no cambia los 135 entrenamientos, sus comparaciones ni ningún parámetro común.
+
+**Motivación.** A5 cambia cuatro componentes a la vez y, por diseño, no permite atribuir su efecto (sección 6.3). Dos variantes intermedias completan la cadena **A0 → A5a → A5b → A5**, en la que cada paso añade un solo componente:
+
+| Modelo | Normalización | Dropout | Upsampling | Orden del decoder | Equivale a | Parámetros (S3) |
+|---|---|---|---|---|---|---|
+| A5a | LayerNorm | 0.1 | Interpolación | Upsample → Conv → Concat | A1 + A2 | ≈ 8.52 M |
+| A5b | LayerNorm | 0.1 | Interpolación | Upsample → Concat → Conv | A1 + A2 + A4 (A5 sin ConvTranspose) | ≈ 9.36 M |
+
+El flujo de canales es el de la sección 6.3: A5a como A0–A3 (la cabeza recibe 128) y A5b como A4–A5 (la cabeza recibe 64). Ninguna de las dos es equivalente por construcción a una configuración ya entrenada.
+
+**Protocolo.** Es idéntico al de la campaña principal: preprocesamiento P0, mismas particiones, semilla por sujeto/fold y orden de batches (por lo tanto, comparaciones apareadas con todas las variantes), Adam + L2, 50 épocas, última época y Pearson macro. Las características P0 se recalculan una vez por sujeto/fold con la misma cadena determinista en float64.
+
+**Contrastes pre-especificados** (`contrasts` en `configs/experiment.yaml`). Son combinaciones lineales del Pearson macro de un mismo sujeto/fold, resumidas igual que las diferencias apareadas (media por sujeto; global = media de sujetos con igual peso):
+
+| Tipo | Contraste | Qué mide |
+|---|---|---|
+| Paso | A5a − P0 | LayerNorm + dropout 0.1 juntos |
+| Paso | A5b − A5a | añadir concat antes de conv |
+| Paso | A5 − A5b | añadir ConvTranspose depthwise |
+| Interacción | A5a − A1 − A2 + P0 | LayerNorm × dropout 0.1 |
+| Interacción | (A5b − A5a) − (A4 − P0) | concat en el contexto LN + d0.1 frente a su efecto sobre A0 |
+| Interacción | (A5 − A5b) − (A3 − P0) | ConvTranspose en el contexto LN + d0.1 + concat frente a su efecto sobre A0 |
+
+Los tres pasos suman exactamente A5 − P0. Una interacción nula indica que el componente aporta lo mismo dentro de la combinación que sobre A0. El orden de la cadena es una elección: los pasos atribuyen el efecto según ese orden, y las interacciones lo comparan con el efecto aislado de la sección 6.
+
+**Presupuesto.** Son 2 variantes × 3 sujetos × 5 folds = **30 entrenamientos**, 165 en total con la campaña principal. Se lanzan solo cuando la principal ha terminado (sección 11 del notebook) y quedan en `results/runs/A5a|A5b/`. Las tablas y figuras generales las incluyen, y `contrasts.csv`, `contrasts_summary.csv` y `figures/contrasts.png` recogen la descomposición.
+
+**Límites.** Hay una semilla por fold y tres sujetos. Cada interacción combina cuatro corridas, así que su variabilidad es mayor que la de una diferencia simple. Las conclusiones son descriptivas, como las de A5.
 
 ---
 

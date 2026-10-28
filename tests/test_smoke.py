@@ -164,10 +164,11 @@ def test_dsp_matches_mne(cfg, bank):
 
 # --------------------------------------------------------------------------- arquitecturas
 
-EXPECTED_PARAMS_S3 = {"A0": 8.52e6, "A1": 8.52e6, "A2": 8.52e6, "A3": 8.53e6, "A4": 9.36e6, "A5": 9.37e6}
+EXPECTED_PARAMS_S3 = {"A0": 8.52e6, "A1": 8.52e6, "A2": 8.52e6, "A3": 8.53e6, "A4": 9.36e6, "A5": 9.37e6,
+                      "A5a": 8.52e6, "A5b": 9.36e6}
 
 
-@pytest.mark.parametrize("arch", ["A0", "A1", "A2", "A3", "A4", "A5"])
+@pytest.mark.parametrize("arch", ["A0", "A1", "A2", "A3", "A4", "A5", "A5a", "A5b"])
 def test_architectures(cfg, arch):
     spec = cfg["architectures"][arch]
     for n_channels in (61, 46, 63):  # S1, S2, S3
@@ -228,7 +229,7 @@ def test_linear_upsample_other_ratios_within_position_rounding(length, size, dty
     _compare_with_torch_interpolate(length, size, dtype, **tolerance)
 
 
-@pytest.mark.parametrize("arch", ["A0", "A1", "A2", "A4"])
+@pytest.mark.parametrize("arch", ["A0", "A1", "A2", "A4", "A5a", "A5b"])
 def test_decoder_matches_the_torch_interpolation_it_replaces(cfg, arch, monkeypatch):
     torch.manual_seed(3)
     model = build_model(arch, cfg, 46 * 40)  # modo entrenamiento: BatchNorm con estadísticas del batch y dropout
@@ -269,3 +270,29 @@ def test_metrics():
     starts = np.array([0, 100, 244])
     windows = np.stack([y[:, s:s + 256] for s in starts])
     np.testing.assert_allclose(overlap_add(windows, starts, 0, 500), y)
+
+
+def test_a5_contrasts(cfg):
+    # Pearson aditivo por componente (LN, dropout 0.1, ConvT, concat) más un efecto de sujeto/fold:
+    # las interacciones se anulan y los tres pasos suman A5 − P0.
+    import pandas as pd
+    from ecog_ablations.reporting import contrasts
+
+    effects = {"P0": 0.0, "A1": 0.03, "A2": 0.05, "A3": -0.02, "A4": 0.01, "A5a": 0.08, "A5b": 0.09, "A5": 0.07}
+    rows = [{"variant": v, "subject": s, "fold": f, "state": "completed",
+             "pearson_macro": 0.5 + 0.01 * i + 0.002 * j + e}
+            for v, e in effects.items() for i, s in enumerate(("S1", "S2", "S3"))
+            for j, f in enumerate(("B1", "B2", "B3", "B4", "B5"))]
+    folds, summary = contrasts(pd.DataFrame(rows), cfg)
+    assert len(folds) == 6 * 15 and folds["delta"].notna().all()
+    glob = summary[summary["subject"] == "global"].set_index("comparison")["delta_mean"]
+    steps = [c["name"] for c in cfg["contrasts"] if c["kind"] == "paso"]
+    interactions = [c["name"] for c in cfg["contrasts"] if c["kind"] == "interacción"]
+    assert glob[steps].sum() == pytest.approx(effects["A5"])
+    np.testing.assert_allclose(glob[interactions], 0.0, atol=1e-12)
+
+    rows[0]["pearson_macro"] = None  # P0 S1 B1 inválido → cuenta como inválido en los contrastes que usan P0
+    _, summary = contrasts(pd.DataFrame(rows), cfg)
+    s1 = summary[summary["subject"] == "S1"].set_index("comparison")
+    assert (s1.loc[["A5a − P0", "A5a − A1 − A2 + P0"], "n_invalid"] == 1).all()
+    assert s1.loc["A5b − A5a", "n_invalid"] == 0

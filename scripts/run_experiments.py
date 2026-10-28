@@ -1,8 +1,10 @@
 #!/usr/bin/env python
-"""Ejecuta la campaña (135 fits) o sus modos auxiliares.
+"""Ejecuta la campaña (135 fits + 30 complementarios de A5a/A5b) o sus modos auxiliares.
 
 Ejemplos:
-    python scripts/run_experiments.py --all
+    python scripts/run_experiments.py --all                       # las 11 variantes (165 fits)
+    python scripts/run_experiments.py --variants P0 P1 P3 P5 A1 A2 A3 A4 A5   # campaña principal (135)
+    python scripts/run_experiments.py --variants A5a A5b          # campaña complementaria (30)
     python scripts/run_experiments.py --quality
     python scripts/run_experiments.py --smoke
     python scripts/run_experiments.py --subjects S1 --folds B1 B2
