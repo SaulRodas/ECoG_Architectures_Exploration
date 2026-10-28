@@ -8,12 +8,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 
+from ecog_ablations import models
 from ecog_ablations.cleaning import apply_clip, exclude_channels, fit_clip
 from ecog_ablations.config import REPO_ROOT, load_config
 from ecog_ablations.data import glove_hold_check, glove_to_feature_rate, load_subject, split_blocks, subject_path
 from ecog_ablations.evaluation import overlap_add, pearson_per_channel, trajectory_metrics
-from ecog_ablations.models import build_model, count_parameters
+from ecog_ablations.models import build_model, count_parameters, linear_upsample
 from ecog_ablations.preprocessing import (
     apply_input_transform,
     build_filter_bank,
@@ -195,6 +197,58 @@ def test_architectures(cfg, arch):
             assert model.expected["head_in"] == 64
         if n_channels == 63:
             assert count_parameters(model) == pytest.approx(EXPECTED_PARAMS_S3[arch], rel=5e-3)
+
+
+def _compare_with_torch_interpolate(length, size, dtype, **tolerance):
+    torch.manual_seed(length * 1000 + size)
+    x = torch.randn(3, 17, length, dtype=dtype, requires_grad=True)
+    x_ref = x.detach().clone().requires_grad_(True)
+    out, expected = linear_upsample(x, size), F.interpolate(x_ref, size=size, mode="linear", align_corners=False)
+    assert out.dtype == expected.dtype and out.shape == expected.shape == (3, 17, size)
+    torch.testing.assert_close(out, expected, **tolerance)
+    grad = torch.randn_like(out)
+    out.backward(grad)
+    expected.backward(grad)
+    torch.testing.assert_close(x.grad, x_ref.grad, **tolerance)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("length,size", [(8, 16), (16, 32), (32, 64), (64, 128), (128, 256)])
+def test_linear_upsample_equals_torch_interpolate_on_decoder_lengths(length, size, dtype):
+    # El decoder duplica 8 → 256 con ventanas de 256: posiciones fuente exactas.
+    _compare_with_torch_interpolate(length, size, dtype)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("length,size", [(7, 15), (100, 255), (150, 300), (5, 5), (1, 6), (10, 4)])
+def test_linear_upsample_other_ratios_within_position_rounding(length, size, dtype):
+    # Proporciones no diádicas (el decoder no las usa): la posición fuente se redondea en float32 como en el
+    # kernel CUDA de PyTorch; el kernel CPU redondea distinto según la versión (~2e-5 en 100 → 255).
+    tolerance = {"atol": 1e-4, "rtol": 1e-4} if dtype == torch.float32 else {}
+    _compare_with_torch_interpolate(length, size, dtype, **tolerance)
+
+
+@pytest.mark.parametrize("arch", ["A0", "A1", "A2", "A4"])
+def test_decoder_matches_the_torch_interpolation_it_replaces(cfg, arch, monkeypatch):
+    torch.manual_seed(3)
+    model = build_model(arch, cfg, 46 * 40)  # modo entrenamiento: BatchNorm con estadísticas del batch y dropout
+    x = torch.randn(2, 46, 40, 256, requires_grad=True)
+
+    def forward_backward():
+        model.zero_grad()
+        x.grad = None
+        torch.manual_seed(5)  # mismas máscaras de dropout en ambas pasadas
+        out = model(x)
+        out.square().mean().backward()
+        return out.detach(), [p.grad.clone() for p in model.parameters()] + [x.grad.clone()]
+
+    out, grads = forward_backward()
+    monkeypatch.setattr(models, "linear_upsample",
+                        lambda t, size: F.interpolate(t, size=size, mode="linear", align_corners=False))
+    reference, reference_grads = forward_backward()
+    torch.testing.assert_close(out, reference)
+    for mine, theirs in zip(grads, reference_grads):
+        torch.testing.assert_close(mine, theirs)
 
 
 # --------------------------------------------------------------------------- métricas

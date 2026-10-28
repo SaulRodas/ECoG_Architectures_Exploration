@@ -6,10 +6,10 @@ si una concatenación no coincide en longitud o canales, se lanza un error.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 from .config import validate_architecture
@@ -53,6 +53,30 @@ def _trace(trace: list | None, stage: str, op: str, x: torch.Tensor) -> None:
         trace.append((stage, op, int(x.shape[1]), int(x.shape[-1])))
 
 
+@lru_cache(maxsize=64)
+def _linear_weights(length: int, size: int, dtype: torch.dtype, device: torch.device):
+    # Índice fuente de upsample_linear1d de PyTorch (area_pixel_compute_source_index, align_corners=False).
+    scale = torch.tensor(length, dtype=dtype) / size
+    position = ((torch.arange(size, dtype=dtype) + 0.5) * scale - 0.5).clamp_min(0)
+    left = position.floor().long()
+    right = (left + 1).clamp_max(length - 1)
+    weight = position - left
+    return left.to(device), right.to(device), weight.to(device)
+
+
+def linear_upsample(x: torch.Tensor, size: int) -> torch.Tensor:
+    """``F.interpolate(x, size, mode="linear", align_corners=False)`` sobre el último eje.
+
+    Misma fórmula, escrita como selección de índices y combinación ponderada. El kernel CUDA de
+    PyTorch paraleliza solo sobre las posiciones de salida y recorre batch × canales en serie (~96 %
+    del paso en el experimento anterior), y su retropropagación usa sumas atómicas no deterministas.
+    """
+    compute = torch.promote_types(x.dtype, torch.float32)
+    left, right, weight = _linear_weights(x.shape[-1], size, compute, x.device)
+    out = x[..., left].to(compute) * (1 - weight) + x[..., right].to(compute) * weight
+    return out.to(x.dtype)
+
+
 class DecoderLevel(nn.Module):
     """Un nivel del decoder: upsampling + Conv1d + concatenación, en el orden indicado."""
 
@@ -72,7 +96,7 @@ class DecoderLevel(nn.Module):
 
     def _upsample(self, x: torch.Tensor, length: int) -> torch.Tensor:
         if self.up is None:
-            return F.interpolate(x, size=length, mode="linear", align_corners=False)
+            return linear_upsample(x, length)
         return self.up(x)
 
     def _concat(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:

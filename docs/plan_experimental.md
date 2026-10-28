@@ -27,6 +27,7 @@ Todos estos cambios se decidieron **antes** de entrenar cualquier modelo.
 | 6 | **Arquitecturas A0–A5 redefinidas** según la especificación de la sección 6. A3/A5 usan ConvTranspose1d depthwise; A4/A5 producen [512,512,256,128,64] canales y la cabeza recibe 64. | Especificación explícita sin cambios implícitos de canales. |
 | 7 | **R-FF y R-DTC se eliminan** del alcance. | Decisión del autor. |
 | 8 | Presupuesto: **135 entrenamientos** (antes 195). | Consecuencia de 5 y 7. |
+| 9 | La interpolación del decoder (A0, A1, A2, A4) usa `linear_upsample`: la misma interpolación lineal con `align_corners=False` que `F.interpolate`, escrita como selección de índices y combinación ponderada. Valores y gradientes iguales a `F.interpolate` (tests); el protocolo no cambia. | El kernel CUDA de `F.interpolate` lineal paraleliza solo sobre las posiciones de salida y recorre batch × canales en serie (~96 % del paso en el experimento anterior), y su retropropagación usa sumas atómicas no deterministas. |
 
 ---
 
@@ -348,7 +349,7 @@ FOLD_INDEX = {"B1": 0, "B2": 1, "B3": 2, "B4": 3, "B5": 4}
 seed = 42 + 5 * SUBJECT_INDEX[subject] + FOLD_INDEX[fold]
 ```
 
-Se fijan las semillas de Python, NumPy, CPU/CUDA de PyTorch y del orden de batches (idéntico entre variantes del mismo sujeto/fold). Se guardan las versiones y el modelo de GPU. Se activa el modo determinista cuando es viable (`cudnn.deterministic`, `use_deterministic_algorithms(warn_only=True)`), sin exigir identidad bit a bit entre plataformas.
+Se fijan las semillas de Python, NumPy, CPU/CUDA de PyTorch y del orden de batches (idéntico entre variantes del mismo sujeto/fold). Se guardan las versiones y el modelo de GPU. Se activa el modo determinista cuando es viable (`cudnn.deterministic`, `use_deterministic_algorithms(warn_only=True)`), sin exigir identidad bit a bit entre plataformas. La interpolación del decoder no usa `F.interpolate`, cuya retropropagación en CUDA no tiene versión determinista (con `warn_only` solo emitiría un aviso).
 
 ---
 
@@ -439,7 +440,7 @@ python scripts/make_report.py
 1. **Datos:** lectura de S1/S2/S3, canales `61/46/63`, cinco bloques, cinco dedos y retención de orden cero alineada.
 2. **Limpieza:** un pico sintético queda limitado; un canal excluido no entra a CMR ni al modelo.
 3. **Sin contaminación:** alterar solo validación no cambia las estadísticas ni las ventanas de entrenamiento; las ventanas respetan bloques, purga y retardo de 2 columnas.
-4. **Arquitecturas:** A0–A5 con entradas sintéticas de S1, S2 y S3 producen `(B,5,256)`, retropropagan sin NaN/Inf, concatenan en la posición indicada y tienen los anchos de la sección 6.
+4. **Arquitecturas:** A0–A5 con entradas sintéticas de S1, S2 y S3 producen `(B,5,256)`, retropropagan sin NaN/Inf, concatenan en la posición indicada y tienen los anchos de la sección 6. `linear_upsample` da los mismos valores y gradientes que `F.interpolate` lineal, por separado y dentro de A0, A1, A2 y A4.
 5. **Métrica:** una predicción idéntica produce Pearson 1; una predicción constante se marca inválida.
 6. **DSP:** la potencia Morlet coincide con `mne.time_frequency.tfr_array_morlet`; P2 y P4 coinciden con P1.
 
