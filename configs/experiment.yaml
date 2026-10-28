@@ -1,0 +1,117 @@
+# Configuración completa del experimento: fuente única de verdad.
+# Cualquier cambio aquí define una campaña distinta; documentarlo en docs/plan_experimental.md.
+
+experiment:
+  name: ecog-architecture-ablations
+  version: "1.0.0"
+
+data:
+  raw_dir: data/raw
+  file_pattern: "sub{n}_comp.mat"
+  fs_ecog: 1000
+  n_samples: 400000                 # 400 s de desarrollo (solo train_data / train_dg)
+  glove_hold_rows: 40               # guante a 25 Hz almacenado con retención de orden cero
+  fingers: [thumb, index, middle, ring, little]
+  subjects:                         # índices de canal base cero, orden del archivo original
+    S1: {file_index: 1, n_channels_raw: 62, excluded: [54], n_channels_used: 61}
+    S2: {file_index: 2, n_channels_raw: 48, excluded: [20, 37], n_channels_used: 46}
+    S3: {file_index: 3, n_channels_raw: 64, excluded: [49], n_channels_used: 63}
+
+folds:
+  names: [B1, B2, B3, B4, B5]       # bloque validado = índice del fold
+  block_seconds: 80
+
+cleaning:
+  clip_k: 25.0                      # límite fijo: mediana ± 25·(1.4826·MAD)
+  mad_scale: 1.4826
+  mad_floor: 1.0e-6                 # mínimo numérico para MAD (unidades de la señal)
+
+preprocessing:
+  std_floor: 1.0e-6                 # mínimo numérico para σ en P3–P5
+  bandpass: {l_freq: 40.0, h_freq: 200.0, l_trans_bandwidth: 10.0, h_trans_bandwidth: 20.0, n_taps: 331}
+  notch: {freqs: [60.0, 120.0, 180.0], width_divisor: 200.0, trans_bandwidth_per_side: 2.0, n_taps: 1651}
+  morlet: {n_freqs: 40, f_min: 40.0, f_max: 200.0, n_cycles: 7.0, zero_mean: true}
+  antialias: {pass_hz: 35.0, stop_hz: 50.0, attenuation_db: 60.0, n_taps: 243}
+  fs_features: 100
+  edge_columns: 125                 # contexto de filtrado descartado por extremo de bloque
+  delay_ms: 20                      # ECoG(t) → guante(t + 20 ms)
+  purge_columns: 256                # purga en train junto al bloque validado
+  window: 256
+  train_stride: 1
+  val_stride: 64
+  robust_quantile_range: [10.0, 90.0]
+  device: auto                      # auto | cpu | cuda (DSP en float64)
+
+training:
+  lr: 8.42e-5
+  weight_decay: 1.0e-6              # L2 acoplada (Adam, no AdamW)
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  batch_size: 128
+  epochs: 50
+  drop_last: true
+  loss: {mse_weight: 0.5, cosine_weight: 0.5, cosine_eps: 1.0e-8}
+  seed_base: 42                     # semilla = 42 + 5·sujeto + fold
+
+runtime:
+  allow_tf32: true                  # tensores float32; convoluciones TF32 en GPUs Ampere+
+  deterministic: true
+  save_model_weights: false
+
+# Arquitecturas A0–A5 (encoder–decoder 1D). Todos los anchos son explícitos.
+# decoder_channels / decoder_kernel_sizes van del nivel más profundo al más superficial.
+architectures:
+  A0: &base
+    stem_channels: 64
+    encoder_channels: [64, 128, 256, 512, 512]
+    kernel_sizes: [7, 7, 5, 5, 5]
+    dilations: [1, 2, 3, 1, 2]
+    decoder_channels: [512, 512, 256, 128, 64]
+    decoder_kernel_sizes: [5, 5, 5, 7, 7]
+    normalization: batch
+    dropout: 0.3
+    upsample: interp
+    decoder_order: upsample_conv_concat
+    convtranspose_mode: null
+    skip_position: pre_pool
+  A1:
+    <<: *base
+    normalization: layer
+  A2:
+    <<: *base
+    dropout: 0.1
+  A3:
+    <<: *base
+    upsample: convtranspose
+    convtranspose_mode: depthwise
+  A4:
+    <<: *base
+    decoder_order: upsample_concat_conv
+  A5:
+    <<: *base
+    normalization: layer
+    dropout: 0.1
+    upsample: convtranspose
+    convtranspose_mode: depthwise
+    decoder_order: upsample_concat_conv
+
+# Configuraciones entrenadas (9 × 3 sujetos × 5 folds = 135 fits). P0 = A0.
+variants:
+  P0: {family: control, preprocessing: P0, architecture: A0, control: null, label: "P0 = A0 (control)"}
+  P1: {family: P, preprocessing: P1, architecture: A0, control: P0, label: "P1: sin referencia"}
+  P3: {family: P, preprocessing: P3, architecture: A0, control: P0, label: "P3: z-score + CMR"}
+  P5: {family: P, preprocessing: P5, architecture: A0, control: P0, label: "P5: z-score − mediana + CMR"}
+  A1: {family: A, preprocessing: P0, architecture: A1, control: P0, label: "A1: LayerNorm"}
+  A2: {family: A, preprocessing: P0, architecture: A2, control: P0, label: "A2: dropout 0.1"}
+  A3: {family: A, preprocessing: P0, architecture: A3, control: P0, label: "A3: ConvTranspose depthwise"}
+  A4: {family: A, preprocessing: P0, architecture: A4, control: P0, label: "A4: concat antes de conv"}
+  A5: {family: A, preprocessing: P0, architecture: A5, control: P0, label: "A5: combinación A1–A4"}
+
+# P2 y P4 no se entrenan: son equivalentes a P1 por construcción bajo la cadena común.
+# Se verifica numéricamente en cada sujeto/fold. P5 frente a P3 es solo informativo.
+equivalence_checks:
+  rel_tol: 1.0e-5
+  pairs:
+    - {preprocessing: P2, reference: P1, decides: true}
+    - {preprocessing: P4, reference: P1, decides: true}
+    - {preprocessing: P5, reference: P3, decides: false}

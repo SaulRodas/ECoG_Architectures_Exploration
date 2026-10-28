@@ -1,0 +1,11 @@
+# Versiones mínimas: en Colab solo se instala lo que falta (normalmente mne) sin degradar lo preinstalado.
+# Las versiones exactas de cada corrida quedan en results/runs/*/config.json.
+numpy>=1.26
+scipy>=1.11
+torch>=2.2
+mne>=1.6
+scikit-learn>=1.3
+pandas>=2.0
+matplotlib>=3.7
+pyyaml>=6.0
+pytest>=7.4
